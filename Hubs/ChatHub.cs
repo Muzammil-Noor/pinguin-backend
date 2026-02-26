@@ -1,34 +1,50 @@
 using Microsoft.AspNetCore.SignalR;
-using Pinguin.Backend.Services;
+using Pinguin.Services;
 
-namespace Pinguin.Backend.Hubs;
-
-public class ChatHub : Hub
+namespace Pinguin.Hubs
 {
-    private readonly UserManager _userManager;
-
-    public ChatHub(UserManager userManager)
+    public class ChatHub : Hub
     {
-        _userManager = userManager;
-    }
+        private readonly UserManager _userManager;
 
-    public override async Task OnDisconnectedAsync(Exception? exception)
-    {
-        var username = _userManager.RemoveUser(Context.ConnectionId);
-        if (username != null)
+        public ChatHub(UserManager userManager)
         {
-            // Notify others that user left
-            await Clients.All.SendAsync("UserLeft", username);
+            _userManager = userManager;
         }
-        await base.OnDisconnectedAsync(exception);
-    }
 
-    public async Task SendMessage(string message)
-    {
-        var username = _userManager.GetUsername(Context.ConnectionId);
-        if (username != null)
+        public async Task<bool> JoinChat(string username)
         {
-            await Clients.All.SendAsync("MessageReceived", username, message);
+            var success = _userManager.TryAddUser(Context.ConnectionId, username);
+            if (success)
+            {
+                await Clients.Others.SendAsync("UserJoined", username);
+            }
+            return success;
+        }
+
+        public IEnumerable<string> GetOnlineUsers()
+        {
+            return _userManager.GetAllUsers();
+        }
+
+        public override async Task OnDisconnectedAsync(Exception? exception)
+        {
+            var username = _userManager.RemoveUser(Context.ConnectionId);
+            if (username != null)
+            {
+                await Clients.All.SendAsync("UserLeft", username);
+            }
+
+            await base.OnDisconnectedAsync(exception);
+        }
+
+        public async Task SendMessage(string message)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username != null)
+            {
+                await Clients.All.SendAsync("MessageReceived", username, message);
+            }
         }
     }
 }

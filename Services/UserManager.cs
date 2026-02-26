@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 
-namespace Pinguin.Backend.Services;
+namespace Pinguin.Services;
 
 public class UserManager
 {
