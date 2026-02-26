@@ -46,5 +46,46 @@ namespace Pinguin.Hubs
                 await Clients.All.SendAsync("MessageReceived", username, message);
             }
         }
+
+        public async Task SendPrivateMessage(string toUsername, string message)
+        {
+            var senderUsername = _userManager.GetUsername(Context.ConnectionId);
+            if (senderUsername != null)
+            {
+                var targetConnectionId = _userManager.GetConnectionId(toUsername);
+                if (targetConnectionId != null)
+                {
+                    // Send to the target user
+                    await Clients.Client(targetConnectionId).SendAsync("PrivateMessageReceived", senderUsername, message, false);
+                    // Echo back to the sender
+                    await Clients.Caller.SendAsync("PrivateMessageReceived", toUsername, message, true);
+                }
+            }
+        }
+
+        public async Task SendFile(string fileName, string fileData, string? toUsername)
+        {
+            var senderUsername = _userManager.GetUsername(Context.ConnectionId);
+            if (senderUsername != null)
+            {
+                if (string.IsNullOrWhiteSpace(toUsername))
+                {
+                    // Global file
+                    await Clients.All.SendAsync("FileReceived", senderUsername, fileName, fileData, null);
+                }
+                else
+                {
+                    // Private file
+                    var targetConnectionId = _userManager.GetConnectionId(toUsername);
+                    if (targetConnectionId != null)
+                    {
+                        // Send to the target user
+                        await Clients.Client(targetConnectionId).SendAsync("FileReceived", senderUsername, fileName, fileData, senderUsername);
+                        // Echo back to the sender
+                        await Clients.Caller.SendAsync("FileReceived", senderUsername, fileName, fileData, toUsername);
+                    }
+                }
+            }
+        }
     }
 }

@@ -1,0 +1,216 @@
+/* Force gradient to cover entire scrollable document */
+html,
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(230deg, #37008f 0%, #000b2e 51%, #000000 100%);
+    background-attachment: fixed;
+}
+
+
+/* Hide scrollbars globally but keep scrolling */
+html,
+body {
+    overflow: auto;
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE/Edge legacy */
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+    display: none;
+    /* Chrome/Safari */
+}
+
+
+h1,
+h2,
+h3,
+p {
+    margin-bottom: 0px;
+}
+
+.dashboard-container {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 50px;
+    width: 100%;
+}
+
+.box1,
+.box2,
+.box3 {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #cfa3ff;
+}
+
+.box1 {
+    height: 30vh;
+    flex-direction: column;
+    margin-bottom: 20px;
+}
+
+.box1 h1 {
+    color: #fff;
+    margin-bottom: 10px;
+    font-size: 2.5em;
+    text-shadow: 0 0 10px rgba(155, 77, 255, 0.5);
+}
+
+.box1 h2 {
+    color: #cca8ff;
+    margin-bottom: 20px;
+    font-weight: 500;
+}
+
+.box2 {
+    min-height: 40vh;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    padding: 0 5%;
+}
+
+.box3 {
+    margin-top: 50px;
+    min-height: 15vh;
+    font-size: 1.2em;
+    padding: 20px;
+    font-style: italic;
+    opacity: 0.8;
+}
+
+.box-a,
+.box-c {
+    width: 20%;
+    min-height: 250px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border: 2px solid #9b4dff;
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 20px rgba(155, 77, 255, 0.2);
+}
+
+.box-a h3 {
+    margin: 15px 0;
+    color: #e0c2ff;
+}
+
+.box-b {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.spinning-logo {
+    display: inline-block;
+    animation: spin 4s linear infinite;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(360deg);
+    }
+
+    100% {
+        transform: rotate(0deg);
+    }
+}
+
+/* Dictionary Table */
+.users-dictionary-container {
+    padding: 0 10%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.users-dictionary-container h2 {
+    color: #fff;
+    margin-bottom: 20px;
+    text-shadow: 0 0 10px rgba(155, 77, 255, 0.5);
+}
+
+.table-wrapper {
+    width: 100%;
+    max-width: 800px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border: 2px solid #9b4dff;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(155, 77, 255, 0.2);
+}
+
+.users-table {
+    width: 100%;
+    border-collapse: collapse;
+    color: #e0c2ff;
+}
+
+.users-table th {
+    background-color: rgba(155, 77, 255, 0.3);
+    padding: 15px;
+    text-align: left;
+    font-weight: bold;
+    color: #fff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #9b4dff;
+}
+
+.users-table td {
+    padding: 12px 15px;
+    border-bottom: 1px solid rgba(155, 77, 255, 0.2);
+}
+
+.users-table tr:last-child td {
+    border-bottom: none;
+}
+
+.users-table tr:hover {
+    background-color: rgba(155, 77, 255, 0.1);
+}
+
+.username-col {
+    font-weight: bold;
+    color: #fff;
+    width: 40%;
+}
+
+.connection-col {
+    font-family: monospace;
+    opacity: 0.8;
+}
+
+@media screen and (max-width: 768px) {
+    .box2 {
+        flex-direction: column;
+        gap: 30px;
+    }
+
+    .box-a,
+    .box-c {
+        width: 90%;
+    }
+
+    .box-b {
+        margin: 20px 0;
+    }
+
+    .users-dictionary-container {
+        padding: 0 5%;
+    }
+}

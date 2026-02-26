@@ -32,8 +32,18 @@ public class UserManager
         return username;
     }
 
+    public string? GetConnectionId(string username)
+    {
+        return _users.FirstOrDefault(x => x.Value == username).Key;
+    }
+
     public IEnumerable<string> GetAllUsers()
     {
         return _users.Values.ToList();
+    }
+
+    public IReadOnlyDictionary<string, string> GetAllUsersDict()
+    {
+        return new Dictionary<string, string>(_users);
     }
 }

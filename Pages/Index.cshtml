@@ -1,0 +1,57 @@
+@page
+@model Pinguin.Pages.IndexModel
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pinguin Server Status</title>
+    <link rel="stylesheet" href="~/css/metrics.css" asp-append-version="true" />
+    <meta http-equiv="refresh" content="5">
+</head>
+<body>
+    <div class="dashboard-container scrollable-container">
+        <div class="box1">
+            <h1>Pinguin Server is running smoothly.</h1>
+            <h2>Thank you for checking up</h2>
+            <h3>@Model.UptimeText</h3>
+        </div>
+        
+        <!-- Active Users Dictionary Table -->
+        <div class="users-dictionary-container">
+            <h2>Active Users Dictionary</h2>
+            @if (Model.ActiveUsers.Count > 0)
+            {
+                <div class="table-wrapper">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Connection ID</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach(var user in Model.ActiveUsers)
+                            {
+                                <tr>
+                                    <td class="username-col">@user.Value</td>
+                                    <td class="connection-col">@user.Key</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            else 
+            {
+                <p style="color: #cfa3ff; text-align: center; margin-top: 20px; font-style: italic;">No active users currently connected.</p>
+            }
+        </div>
+
+        <div class="box3">
+            <h3>@Model.Quote</h3>
+        </div>
+    </div>
+</body>
+</html>
