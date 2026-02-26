@@ -9,9 +9,7 @@ public class UserManager
 
     public bool TryAddUser(string connectionId, string username)
     {
-        // Check if username is already taken (case-insensitive for uniqueness check, 
-        // though PRD says case-sensitive, usually uniqueness is case-insensitive to prevent impostors. 
-        // We'll stick strictly to PRD: "Case-sensitive, Globally unique")
+        // Check if username is already taken (case-insensitive for uniqueness check,)
         if (_users.Values.Any(u => u == username))
         {
             return false;
