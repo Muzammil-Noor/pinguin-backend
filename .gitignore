@@ -1,0 +1,69 @@
+# Build results
+bin/
+obj/
+out/
+GeneratedFiles/
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ASP.NET Scaffolding
+ScaffoldingReadMe.txt
+
+# Visual Studio Code
+.vscode/
+.history/
+
+# Rider
+.idea/
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.log
+*.tlog
+*.cache
+*.dbmdl
+
+# Package directories
+packages/
+*.nupkg
+# ASP.NET static assets (Blazor or MVC)
+wwwroot/files
+files/
+
+# Blazor WebAssembly (optional)
+/wwwroot/service-worker-assets.js
+/wwwroot/_framework/
+/wwwroot/_content/
+
+# Logs
+*.log
+logs/
+LogFiles/
+
+# Publish output
+publish/
+*.Publish.xml
+
+# Node-related (if using npm/yarn for frontend tooling)
+node_modules/
+dist/
+npm-debug.log*
+yarn-error.log
+
+# Environment files
+.env
+.env.*
+
+# Others
+*.DS_Store
+*.tgz
+
+# Local secrets
+secrets.json
