@@ -57,9 +57,35 @@ namespace Pinguin.Hubs
         public async Task SendMessage(string message)
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
+            Console.WriteLine($"Message Received: {message}");
             if (username != null)
             {
                 await Clients.All.SendAsync("MessageReceived", username, message);
+            }
+        }
+
+        public async Task SendFile(string fileName, string fileData, string? toUser)
+        {
+            var senderUsername = _userManager.GetUsername(Context.ConnectionId);
+            if (senderUsername == null) return;
+
+            if (string.IsNullOrEmpty(toUser))
+            {
+                // Global file
+                await Clients.All.SendAsync("FileReceived", senderUsername, fileName, fileData, false, null);
+            }
+            else
+            {
+                // Private file
+                var targetConnectionId = _userManager.GetConnectionId(toUser);
+                if (targetConnectionId != null)
+                {
+                    // Send to recipient
+                    await Clients.Client(targetConnectionId).SendAsync("FileReceived", senderUsername, fileName, fileData, true, null);
+                }
+
+                // Send back to caller so they see their own file
+                await Clients.Caller.SendAsync("FileReceived", senderUsername, fileName, fileData, true, toUser);
             }
         }
 
