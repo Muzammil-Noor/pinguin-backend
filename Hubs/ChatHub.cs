@@ -54,7 +54,7 @@ namespace Pinguin.Hubs
             await base.OnDisconnectedAsync(exception);
         }
 
-        public async Task SendMessage(string message)
+        public async Task SendMessage(object message)
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
             Console.WriteLine($"Message Received: {message}");
@@ -64,7 +64,7 @@ namespace Pinguin.Hubs
             }
         }
 
-        public async Task SendFile(string fileName, string fileData, string? toUser)
+        public async Task SendFile(string fileName, string fileData, string? toUser, string? caption = null)
         {
             var senderUsername = _userManager.GetUsername(Context.ConnectionId);
             if (senderUsername == null) return;
@@ -72,7 +72,7 @@ namespace Pinguin.Hubs
             if (string.IsNullOrEmpty(toUser))
             {
                 // Global file
-                await Clients.All.SendAsync("FileReceived", senderUsername, fileName, fileData, false, null);
+                await Clients.All.SendAsync("FileReceived", senderUsername, fileName, fileData, false, null, caption);
             }
             else
             {
@@ -81,11 +81,11 @@ namespace Pinguin.Hubs
                 if (targetConnectionId != null)
                 {
                     // Send to recipient
-                    await Clients.Client(targetConnectionId).SendAsync("FileReceived", senderUsername, fileName, fileData, true, null);
+                    await Clients.Client(targetConnectionId).SendAsync("FileReceived", senderUsername, fileName, fileData, true, null, caption);
                 }
 
                 // Send back to caller so they see their own file
-                await Clients.Caller.SendAsync("FileReceived", senderUsername, fileName, fileData, true, toUser);
+                await Clients.Caller.SendAsync("FileReceived", senderUsername, fileName, fileData, true, toUser, caption);
             }
         }
 
