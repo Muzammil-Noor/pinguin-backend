@@ -7,13 +7,15 @@ namespace Pinguin.Hubs
     public class ChatHub : Hub
     {
         private readonly UserManager _userManager;
+        private readonly ChatroomManager _chatroomManager;
 
         // Store PUBLIC keys only (true E2EE)
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
-        public ChatHub(UserManager userManager)
+        public ChatHub(UserManager userManager, ChatroomManager chatroomManager)
         {
             _userManager = userManager;
+            _chatroomManager = chatroomManager;
         }
 
         public async Task<bool> JoinChat(string username)
@@ -103,6 +105,138 @@ namespace Pinguin.Hubs
 
             await Clients.Caller
                 .SendAsync("PrivateMessageSent", toUsername, payload);
+        }
+
+        // =========================
+        // CHATROOMS
+        // =========================
+
+        public async Task<object?> CreateRoom(string name)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return null;
+
+            var room = _chatroomManager.CreateRoom(name, username);
+            await Groups.AddToGroupAsync(Context.ConnectionId, room.Id);
+            
+            await Clients.All.SendAsync("RoomCreated", room);
+            return room;
+        }
+
+        public async Task<bool> DeleteRoom(string roomId)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return false;
+
+            if (_chatroomManager.DeleteRoom(roomId, username))
+            {
+                await Clients.All.SendAsync("RoomDeleted", roomId);
+                return true;
+            }
+            return false;
+        }
+
+        public async Task<bool> RenameRoom(string roomId, string newName)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return false;
+
+            if (_chatroomManager.RenameRoom(roomId, newName, username))
+            {
+                await Clients.All.SendAsync("RoomRenamed", roomId, newName);
+                return true;
+            }
+            return false;
+        }
+
+        public async Task<bool> InviteToRoom(string roomId, string targetUsername)
+        {
+            var requester = _userManager.GetUsername(Context.ConnectionId);
+            if (requester == null) return false;
+
+            var room = _chatroomManager.GetRoom(roomId);
+            if (room == null || room.Owner != requester) return false;
+
+            if (_chatroomManager.TryAddMember(roomId, targetUsername))
+            {
+                var targetConnId = _userManager.GetConnectionId(targetUsername);
+                if (targetConnId != null)
+                {
+                    await Groups.AddToGroupAsync(targetConnId, roomId);
+                    await Clients.Client(targetConnId).SendAsync("RoomInvited", room);
+                }
+                await Clients.Group(roomId).SendAsync("RoomMemberJoined", roomId, targetUsername);
+                return true;
+            }
+            return false;
+        }
+
+        public async Task<bool> KickFromRoom(string roomId, string targetUsername)
+        {
+            var requester = _userManager.GetUsername(Context.ConnectionId);
+            if (requester == null) return false;
+
+            if (_chatroomManager.KickMember(roomId, targetUsername, requester))
+            {
+                var targetConnId = _userManager.GetConnectionId(targetUsername);
+                if (targetConnId != null)
+                {
+                    await Clients.Client(targetConnId).SendAsync("KickedFromRoom", roomId);
+                    await Groups.RemoveFromGroupAsync(targetConnId, roomId);
+                }
+                await Clients.Group(roomId).SendAsync("RoomMemberLeft", roomId, targetUsername, null);
+                return true;
+            }
+            return false;
+        }
+
+        public async Task LeaveRoom(string roomId)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var (room, wasOwner, deleted) = _chatroomManager.RemoveMember(roomId, username);
+            if (room != null)
+            {
+                await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomId);
+                
+                if (deleted)
+                {
+                    await Clients.All.SendAsync("RoomDeleted", roomId);
+                }
+                else
+                {
+                    string? newOwner = wasOwner ? room.Owner : null;
+                    await Clients.Group(roomId).SendAsync("RoomMemberLeft", roomId, username, newOwner);
+                }
+            }
+        }
+
+        public async Task SendRoomMessage(string roomId, object payload)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var room = _chatroomManager.GetRoom(roomId);
+            if (room == null || !room.Members.Contains(username)) return;
+
+            await Clients.Group(roomId).SendAsync("RoomMessageReceived", roomId, username, payload);
+        }
+
+        public async Task SendRoomFile(string roomId, string fileName, string fileData, string? caption = null)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var room = _chatroomManager.GetRoom(roomId);
+            if (room == null || !room.Members.Contains(username)) return;
+
+            await Clients.Group(roomId).SendAsync("RoomFileReceived", roomId, username, fileName, fileData, caption);
+        }
+
+        public IEnumerable<object> GetRooms()
+        {
+            return _chatroomManager.GetAllRooms();
         }
     }
 }
