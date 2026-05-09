@@ -119,7 +119,7 @@ namespace Pinguin.Hubs
             var room = _chatroomManager.CreateRoom(name, username);
             await Groups.AddToGroupAsync(Context.ConnectionId, room.Id);
             
-            await Clients.All.SendAsync("RoomCreated", room);
+            await Clients.Caller.SendAsync("RoomCreated", room);
             return room;
         }
 
@@ -130,7 +130,7 @@ namespace Pinguin.Hubs
 
             if (_chatroomManager.DeleteRoom(roomId, username))
             {
-                await Clients.All.SendAsync("RoomDeleted", roomId);
+                await Clients.Group(roomId).SendAsync("RoomDeleted", roomId);
                 return true;
             }
             return false;
@@ -143,7 +143,7 @@ namespace Pinguin.Hubs
 
             if (_chatroomManager.RenameRoom(roomId, newName, username))
             {
-                await Clients.All.SendAsync("RoomRenamed", roomId, newName);
+                await Clients.Group(roomId).SendAsync("RoomRenamed", roomId, newName);
                 return true;
             }
             return false;
