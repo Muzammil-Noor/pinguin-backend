@@ -10,6 +10,7 @@ builder.Services.AddSignalR(options =>
     options.MaximumReceiveMessageSize = 100 * 1024 * 1024; // 100 MB
 });
 builder.Services.AddSingleton<UserManager>();
+builder.Services.AddSingleton<ChatroomManager>();
 builder.Services.AddRazorPages();
 
 // Setup CORS
