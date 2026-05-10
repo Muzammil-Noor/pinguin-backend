@@ -51,6 +51,27 @@ namespace Pinguin.Hubs
             {
                 _publicKeys.TryRemove(username, out _);
                 await Clients.All.SendAsync("UserLeft", username);
+
+                var rooms = _chatroomManager.GetAllRooms().ToList();
+                foreach (var room in rooms)
+                {
+                    if (room.Members.Contains(username))
+                    {
+                        var (removedRoom, wasOwner, deleted) = _chatroomManager.RemoveMember(room.Id, username);
+                        if (removedRoom != null)
+                        {
+                            if (deleted)
+                            {
+                                await Clients.All.SendAsync("RoomDeleted", room.Id);
+                            }
+                            else
+                            {
+                                string? newOwner = wasOwner ? removedRoom.Owner : null;
+                                await Clients.Group(room.Id).SendAsync("RoomMemberLeft", room.Id, username, newOwner);
+                            }
+                        }
+                    }
+                }
             }
 
             await base.OnDisconnectedAsync(exception);
