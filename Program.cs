@@ -11,6 +11,12 @@ builder.Services.AddSignalR(options =>
 });
 builder.Services.AddSingleton<UserManager>();
 builder.Services.AddSingleton<ChatroomManager>();
+builder.Services.AddSingleton<StudyRoomManager>();
+builder.Services.AddSingleton<StudyRoomAiMemory>();
+builder.Services.AddSingleton<StudyRoomRateLimiter>();
+builder.Services.AddSingleton<ILlmService, GeminiLlmService>();
+builder.Services.AddHostedService<StudyRoomExpiryService>();
+builder.Services.AddHttpClient();
 builder.Services.AddRazorPages();
 
 // Setup CORS

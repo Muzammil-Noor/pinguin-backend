@@ -6,16 +6,28 @@ namespace Pinguin.Hubs
 {
     public class ChatHub : Hub
     {
-        private readonly UserManager _userManager;
-        private readonly ChatroomManager _chatroomManager;
+        private readonly StudyRoomManager _studyRoomManager;
+        private readonly StudyRoomAiMemory _aiMemory;
+        private readonly StudyRoomRateLimiter _rateLimiter;
+        private readonly ILlmService _llmService;
 
         // Store PUBLIC keys only (true E2EE)
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
-        public ChatHub(UserManager userManager, ChatroomManager chatroomManager)
+        public ChatHub(
+            UserManager userManager, 
+            ChatroomManager chatroomManager,
+            StudyRoomManager studyRoomManager,
+            StudyRoomAiMemory aiMemory,
+            StudyRoomRateLimiter rateLimiter,
+            ILlmService llmService)
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
+            _studyRoomManager = studyRoomManager;
+            _aiMemory = aiMemory;
+            _rateLimiter = rateLimiter;
+            _llmService = llmService;
         }
 
         public async Task<bool> JoinChat(string username)
@@ -52,6 +64,7 @@ namespace Pinguin.Hubs
                 _publicKeys.TryRemove(username, out _);
                 await Clients.All.SendAsync("UserLeft", username);
 
+                // Chatrooms cleanup
                 var rooms = _chatroomManager.GetAllRooms().ToList();
                 foreach (var room in rooms)
                 {
@@ -71,6 +84,34 @@ namespace Pinguin.Hubs
                             }
                         }
                     }
+                }
+
+                // Study rooms cleanup
+                var studyRooms = _studyRoomManager.GetRoomsForUser(username).ToList();
+                foreach (var room in studyRooms)
+                {
+                    var (removedRoom, wasOwner, deleted) = _studyRoomManager.RemoveMember(room.Id, username);
+                    if (removedRoom != null)
+                    {
+                        if (deleted)
+                        {
+                            await Clients.Group($"study_{room.Id}").SendAsync("StudyRoomDeleted", room.Id);
+                            _aiMemory.ClearRoom(room.Id);
+                            _rateLimiter.ClearRoom(room.Id);
+                        }
+                        else
+                        {
+                            string? newOwner = wasOwner ? removedRoom.Owner : null;
+                            await Clients.Group($"study_{room.Id}").SendAsync("StudyRoomMemberLeft", room.Id, username, newOwner);
+                        }
+                    }
+                }
+
+                // Pending study room invites cleanup
+                var affectedInvites = _studyRoomManager.RemoveInvitesInvolving(username);
+                foreach (var invite in affectedInvites)
+                {
+                    await Clients.Group($"study_invite_{invite.Id}").SendAsync("StudyRoomInviteCancelled", invite.Id, username);
                 }
             }
 
@@ -258,6 +299,173 @@ namespace Pinguin.Hubs
         public IEnumerable<object> GetRooms()
         {
             return _chatroomManager.GetAllRooms();
+        }
+
+        // =========================
+        // STUDY ROOMS
+        // =========================
+
+        public async Task<string?> CreateStudyRoom(List<string> invitedUsernames)
+        {
+            var creator = _userManager.GetUsername(Context.ConnectionId);
+            if (creator == null || invitedUsernames == null || invitedUsernames.Count == 0) return null;
+
+            // Self must be included in members list but invitedUsernames should not contain self for the invite broadcast
+            var allMembers = invitedUsernames.Distinct().ToList();
+            allMembers.Add(creator);
+
+            if (allMembers.Count < 2) return null;
+
+            var invite = _studyRoomManager.CreatePendingInvite(creator, invitedUsernames);
+            
+            // Add creator to a special group for this invite to receive updates
+            await Groups.AddToGroupAsync(Context.ConnectionId, $"study_invite_{invite.Id}");
+
+            // Broadcast invite to each invited user
+            foreach (var username in invitedUsernames)
+            {
+                var connId = _userManager.GetConnectionId(username);
+                if (connId != null)
+                {
+                    await Groups.AddToGroupAsync(connId, $"study_invite_{invite.Id}");
+                    await Clients.Client(connId).SendAsync("StudyRoomInviteReceived", new {
+                        inviteId = invite.Id,
+                        inviter = creator,
+                        members = allMembers
+                    });
+                }
+            }
+
+            return invite.Id;
+        }
+
+        public async Task<bool> RespondToStudyRoomInvite(string inviteId, bool accept)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return false;
+
+            var invite = _studyRoomManager.GetPendingInvite(inviteId);
+            if (invite == null) return false;
+
+            if (accept)
+            {
+                if (_studyRoomManager.AcceptInvite(inviteId, username))
+                {
+                    await Clients.Group($"study_invite_{inviteId}").SendAsync("StudyRoomInviteAccepted", inviteId, username);
+
+                    if (invite.AllAccepted)
+                    {
+                        var allMembers = new List<string>(invite.InvitedMembers) { invite.Creator };
+                        var room = _studyRoomManager.CreateRoom(invite.Creator, allMembers);
+
+                        foreach (var member in allMembers)
+                        {
+                            var connId = _userManager.GetConnectionId(member);
+                            if (connId != null)
+                            {
+                                await Groups.AddToGroupAsync(connId, $"study_{room.Id}");
+                                // Clean up the invite group
+                                await Groups.RemoveFromGroupAsync(connId, $"study_invite_{inviteId}");
+                            }
+                        }
+
+                        await Clients.Group($"study_{room.Id}").SendAsync("StudyRoomCreated", room);
+                        _studyRoomManager.RemovePendingInvite(inviteId);
+                    }
+                    return true;
+                }
+            }
+            else
+            {
+                if (_studyRoomManager.DeclineInvite(inviteId, username))
+                {
+                    await Clients.Group($"study_invite_{inviteId}").SendAsync("StudyRoomInviteDeclined", inviteId, username);
+                    _studyRoomManager.RemovePendingInvite(inviteId);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public async Task LeaveStudyRoom(string roomId)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var (room, wasOwner, deleted) = _studyRoomManager.RemoveMember(roomId, username);
+            if (room != null)
+            {
+                await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"study_{roomId}");
+                
+                if (deleted)
+                {
+                    await Clients.Group($"study_{roomId}").SendAsync("StudyRoomDeleted", roomId);
+                    _aiMemory.ClearRoom(roomId);
+                    _rateLimiter.ClearRoom(roomId);
+                }
+                else
+                {
+                    string? newOwner = wasOwner ? room.Owner : null;
+                    await Clients.Group($"study_{roomId}").SendAsync("StudyRoomMemberLeft", roomId, username, newOwner);
+                }
+            }
+        }
+
+        public async Task SendStudyRoomMessage(string roomId, object payload)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var room = _studyRoomManager.GetRoom(roomId);
+            if (room == null || !room.Members.Contains(username)) return;
+
+            // Study room messages are plaintext (no E2EE)
+            await Clients.Group($"study_{roomId}").SendAsync("StudyRoomMessageReceived", roomId, username, payload);
+        }
+
+        public async Task PromptPingu(string roomId, string prompt)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            var room = _studyRoomManager.GetRoom(roomId);
+            if (room == null || !room.Members.Contains(username)) return;
+
+            if (_studyRoomManager.IsExpired(roomId)) return;
+
+            if (!_rateLimiter.TryConsume(roomId))
+            {
+                var resetSeconds = _rateLimiter.GetResetTimeSeconds(roomId);
+                await Clients.Group($"study_{roomId}").SendAsync("PinguResponse", roomId, prompt, "I am busy! Try again in a moment. 🐧", DateTime.UtcNow);
+                return;
+            }
+
+            // Broadcast that Pingu is thinking
+            await Clients.Group($"study_{roomId}").SendAsync("PinguTyping", roomId, true);
+
+            try
+            {
+                var history = _aiMemory.GetHistory(roomId);
+                var response = await _llmService.GenerateResponseAsync(roomId, prompt, history);
+
+                // Save to memory
+                _aiMemory.AddMessage(roomId, "user", prompt);
+                _aiMemory.AddMessage(roomId, "model", response);
+
+                await Clients.Group($"study_{roomId}").SendAsync("PinguResponse", roomId, prompt, response, DateTime.UtcNow);
+            }
+            finally
+            {
+                await Clients.Group($"study_{roomId}").SendAsync("PinguTyping", roomId, false);
+            }
+        }
+
+        public IEnumerable<StudyRoom> GetStudyRooms()
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return Enumerable.Empty<StudyRoom>();
+            return _studyRoomManager.GetRoomsForUser(username);
         }
     }
 }
