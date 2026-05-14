@@ -7,6 +7,88 @@ public class StudyRoomManager
     private readonly ConcurrentDictionary<string, StudyRoom> _rooms = new();
     private readonly ConcurrentDictionary<string, PendingStudyRoomInvite> _pendingInvites = new();
 
+    // =========================
+    // PENDING INVITATIONS
+    // =========================
+
+    public PendingStudyRoomInvite CreatePendingInvite(string creator, List<string> invitedMembers)
+    {
+        var invite = new PendingStudyRoomInvite
+        {
+            Creator = creator,
+            InvitedMembers = invitedMembers,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
+        _pendingInvites.TryAdd(invite.Id, invite);
+        return invite;
+    }
+
+    public PendingStudyRoomInvite? GetPendingInvite(string inviteId)
+    {
+        _pendingInvites.TryGetValue(inviteId, out var invite);
+        return invite;
+    }
+
+    public bool AcceptInvite(string inviteId, string username)
+    {
+        if (_pendingInvites.TryGetValue(inviteId, out var invite))
+        {
+            if (invite.IsExpired || invite.AnyDeclined) return false;
+            if (!invite.InvitedMembers.Contains(username)) return false;
+            invite.AcceptedMembers.Add(username);
+            return true;
+        }
+        return false;
+    }
+
+    public bool DeclineInvite(string inviteId, string username)
+    {
+        if (_pendingInvites.TryGetValue(inviteId, out var invite))
+        {
+            if (!invite.InvitedMembers.Contains(username)) return false;
+            invite.DeclinedMembers.Add(username);
+            return true;
+        }
+        return false;
+    }
+
+    public void RemovePendingInvite(string inviteId)
+    {
+        _pendingInvites.TryRemove(inviteId, out _);
+    }
+
+    /// <summary>
+    /// Returns all expired or declined pending invites for cleanup.
+    /// </summary>
+    public IEnumerable<PendingStudyRoomInvite> GetExpiredInvites()
+    {
+        return _pendingInvites.Values
+            .Where(i => i.IsExpired || i.AnyDeclined)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Removes all pending invites involving a specific user (for disconnect cleanup).
+    /// Returns the affected invite IDs.
+    /// </summary>
+    public List<PendingStudyRoomInvite> RemoveInvitesInvolving(string username)
+    {
+        var affected = _pendingInvites.Values
+            .Where(i => i.Creator == username || i.InvitedMembers.Contains(username))
+            .ToList();
+
+        foreach (var invite in affected)
+        {
+            _pendingInvites.TryRemove(invite.Id, out _);
+        }
+
+        return affected;
+    }
+
+    // =========================
+    // STUDY ROOMS
+    // =========================
+
     public StudyRoom CreateRoom(string owner, List<string> allMembers)
     {
         var room = new StudyRoom
