@@ -7,8 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Betalgo.OpenAI" Version="8.7.2" />
     <PackageReference Include="dotenv.net" Version="4.0.2" />
     <PackageReference Include="Google.GenAI" Version="1.6.2" />
+    <PackageReference Include="HuggingFace.Net" Version="1.0.0" />
   </ItemGroup>
 
 </Project>
