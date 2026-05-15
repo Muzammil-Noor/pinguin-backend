@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="dotenv.net" Version="4.0.2" />
+    <PackageReference Include="Google.GenAI" Version="1.6.2" />
   </ItemGroup>
 
 </Project>
