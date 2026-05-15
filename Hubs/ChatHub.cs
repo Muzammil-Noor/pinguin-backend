@@ -6,6 +6,8 @@ namespace Pinguin.Hubs
 {
     public class ChatHub : Hub
     {
+        private readonly UserManager _userManager;
+        private readonly ChatroomManager _chatroomManager;
         private readonly StudyRoomManager _studyRoomManager;
         private readonly StudyRoomAiMemory _aiMemory;
         private readonly StudyRoomRateLimiter _rateLimiter;
