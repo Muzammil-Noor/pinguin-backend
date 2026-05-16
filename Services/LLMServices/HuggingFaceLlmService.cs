@@ -11,6 +11,7 @@ namespace Pinguin.Services
     public class HuggingFaceLlmService : ILlmService
     {
         private readonly HttpClient _httpClient;
+
         private const string SystemPrompt = @"
 You are Pingu, a friendly study assistant.
 Guide students to understanding, never give direct answers.
@@ -20,10 +21,16 @@ Be concise, warm, and encouraging.
         public HuggingFaceLlmService()
         {
             var apiKey = Environment.GetEnvironmentVariable("HF_API_KEY")
-                         ?? throw new InvalidOperationException("HF_API_KEY environment variable is not set.");
+                ?? throw new InvalidOperationException(
+                    "HF_API_KEY environment variable is not set.");
 
             _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", apiKey);
+
+            _httpClient.DefaultRequestHeaders.UserAgent
+                .ParseAdd("PinguinApp/1.0");
         }
 
         public async Task<string> GenerateResponseAsync(
@@ -33,41 +40,77 @@ Be concise, warm, and encouraging.
         {
             try
             {
-                // Build the prompt with system instruction + conversation
-                string fullPrompt = SystemPrompt + "\n";
-                foreach (var msg in conversationHistory)
+                // Build chat history
+                var messages = new List<object>
                 {
-                    fullPrompt += (msg.Role == "model" ? "Assistant: " : "User: ") + msg.Content + "\n";
-                }
-                fullPrompt += "User: " + userPrompt + "\nAssistant: ";
-
-                var requestBody = new
-                {
-                    inputs = fullPrompt,
-                    parameters = new
+                    new
                     {
-                        max_new_tokens = 150,
-                        temperature = 0.7
+                        role = "system",
+                        content = SystemPrompt
                     }
                 };
 
-                var json = JsonSerializer.Serialize(requestBody);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                // Add previous conversation
+                foreach (var msg in conversationHistory)
+                {
+                    messages.Add(new
+                    {
+                        role = msg.Role == "model" ? "assistant" : "user",
+                        content = msg.Content
+                    });
+                }
 
-                // Call a public model endpoint
+                // Add latest user message
+                messages.Add(new
+                {
+                    role = "user",
+                    content = userPrompt
+                });
+
+                // OpenAI-compatible request body
+                var requestBody = new
+                {
+                    model = "Qwen/Qwen2.5-72B-Instruct",
+                    messages = messages,
+                    max_tokens = 150,
+                    temperature = 0.7
+                };
+
+                var json = JsonSerializer.Serialize(requestBody);
+
+                var content = new StringContent(
+                    json,
+                    Encoding.UTF8,
+                    "application/json");
+
+                // NEW Hugging Face router endpoint
                 var response = await _httpClient.PostAsync(
-                    "https://api-inference.huggingface.co/models/gpt2",
+                    "https://router.huggingface.co/v1/chat/completions",
                     content);
 
+                // Error handling
                 if (!response.IsSuccessStatusCode)
                 {
-                    Console.Error.WriteLine($"Hugging Face API error: {response.StatusCode}");
+                    var errorBody = await response.Content.ReadAsStringAsync();
+
+                    Console.Error.WriteLine(
+                        $"HF API error: {response.StatusCode}");
+
+                    Console.Error.WriteLine(errorBody);
+
                     return "Oops, something went wrong on my end. Try again shortly! 🐧";
                 }
 
+                // Parse OpenAI-style response
                 var resultJson = await response.Content.ReadAsStringAsync();
+
                 using var doc = JsonDocument.Parse(resultJson);
-                var text = doc.RootElement[0].GetProperty("generated_text").GetString();
+
+                var text = doc.RootElement
+                    .GetProperty("choices")[0]
+                    .GetProperty("message")
+                    .GetProperty("content")
+                    .GetString();
 
                 return string.IsNullOrWhiteSpace(text)
                     ? "Hmm, I couldn't think of an answer. Could you try rephrasing? 🐧"
@@ -75,7 +118,8 @@ Be concise, warm, and encouraging.
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"Exception: {ex.Message}");
+                Console.Error.WriteLine($"Exception: {ex}");
+
                 return "Oops, something went wrong on my end. Try again shortly! 🐧";
             }
         }
