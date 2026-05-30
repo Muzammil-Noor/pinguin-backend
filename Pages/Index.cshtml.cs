@@ -13,7 +13,6 @@ namespace Pinguin.Pages
         public double UsedRamMb { get; set; }
         public double TotalRamMb { get; set; }
         public int UsersCount { get; set; }
-        public string Quote { get; set; } = "";
         public IReadOnlyDictionary<string, string> ActiveUsers { get; set; } = new Dictionary<string, string>();
 
         private static readonly string[] Messages = [
@@ -44,6 +43,8 @@ namespace Pinguin.Pages
             "Stop dreaming like a child and start grinding like a savage. Life isn't waiting for your permission.",
             "If your best effort looks like a joke, maybe you're just the punchline."
         ];
+        static Random random = new Random();
+        string Quote = Messages[random.Next(Messages.Length)];
 
         public IndexModel(UserManager userManager)
         {
@@ -71,8 +72,6 @@ namespace Pinguin.Pages
             ActiveUsers = _userManager.GetAllUsersDict();
             UsersCount = ActiveUsers.Count;
 
-            Random random = new Random();
-            Quote = Messages[random.Next(Messages.Length)];
         }
     }
 }
