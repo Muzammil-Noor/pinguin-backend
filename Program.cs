@@ -17,6 +17,7 @@ builder.Services.AddSingleton<ChatroomManager>();
 builder.Services.AddSingleton<StudyRoomManager>();
 builder.Services.AddSingleton<StudyRoomAiMemory>();
 builder.Services.AddSingleton<StudyRoomRateLimiter>();
+builder.Services.AddSingleton<BlockManager>();
 builder.Services.AddSingleton<ILlmService, HuggingFaceLlmService>();
 builder.Services.AddHostedService<StudyRoomExpiryService>();
 builder.Services.AddHttpClient();
@@ -46,8 +47,3 @@ app.MapHub<ChatHub>("/chathub");
 app.MapRazorPages();
 
 app.Run();
-
-public static class Globals
-{
-    public static readonly DateTime ServerStart = DateTime.Now;
-}

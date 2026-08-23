@@ -12,6 +12,7 @@ namespace Pinguin.Hubs
         private readonly StudyRoomAiMemory _aiMemory;
         private readonly StudyRoomRateLimiter _rateLimiter;
         private readonly ILlmService _llmService;
+        private readonly BlockManager _blockManager;
 
         // Store PUBLIC keys only (true E2EE)
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
@@ -22,7 +23,8 @@ namespace Pinguin.Hubs
             StudyRoomManager studyRoomManager,
             StudyRoomAiMemory aiMemory,
             StudyRoomRateLimiter rateLimiter,
-            ILlmService llmService)
+            ILlmService llmService,
+            BlockManager blockManager)
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
@@ -30,6 +32,44 @@ namespace Pinguin.Hubs
             _aiMemory = aiMemory;
             _rateLimiter = rateLimiter;
             _llmService = llmService;
+            _blockManager = blockManager;
+        }
+
+        // =========================
+        // BLOCK FILTERING
+        // =========================
+
+        /// <summary>
+        /// Connection IDs of everyone who has blocked <paramref name="sender"/>, so they can be
+        /// excluded from a broadcast. Returns null when nobody has blocked them -- the normal
+        /// case -- letting callers take the cheaper unfiltered path.
+        ///
+        /// Filtering keys on sender identity, never message content, so it works unchanged on
+        /// end-to-end encrypted payloads the server cannot read.
+        /// </summary>
+        private IReadOnlyList<string>? GetBlockedRecipients(string sender)
+        {
+            List<string>? excluded = null;
+
+            foreach (var blocker in _blockManager.GetBlockersOf(sender))
+            {
+                var connectionId = _userManager.GetConnectionId(blocker);
+                if (connectionId != null) (excluded ??= new List<string>()).Add(connectionId);
+            }
+
+            return excluded;
+        }
+
+        private IClientProxy AllExcludingBlockers(string sender)
+        {
+            var excluded = GetBlockedRecipients(sender);
+            return excluded == null ? Clients.All : Clients.AllExcept(excluded);
+        }
+
+        private IClientProxy GroupExcludingBlockers(string groupName, string sender)
+        {
+            var excluded = GetBlockedRecipients(sender);
+            return excluded == null ? Clients.Group(groupName) : Clients.GroupExcept(groupName, excluded);
         }
 
         public async Task<bool> JoinChat(string username)
@@ -64,6 +104,10 @@ namespace Pinguin.Hubs
             if (username != null)
             {
                 _publicKeys.TryRemove(username, out _);
+
+                // The username is freed immediately, so its blocks must die with it --
+                // whoever claims the name next must not inherit them.
+                _blockManager.RemoveUser(username);
                 await Clients.All.SendAsync("UserLeft", username);
 
                 // Chatrooms cleanup
@@ -123,11 +167,9 @@ namespace Pinguin.Hubs
         public async Task SendMessage(object message)
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
-            Console.WriteLine($"Message Received: {message}");
-            if (username != null)
-            {
-                await Clients.All.SendAsync("MessageReceived", username, message);
-            }
+            if (username == null) return;
+
+            await AllExcludingBlockers(username).SendAsync("MessageReceived", username, message);
         }
 
         public async Task SendFile(string fileName, string fileData, string? toUser, string? caption = null)
@@ -138,19 +180,22 @@ namespace Pinguin.Hubs
             if (string.IsNullOrEmpty(toUser))
             {
                 // Global file
-                await Clients.All.SendAsync("FileReceived", senderUsername, fileName, fileData, false, null, caption);
+                await AllExcludingBlockers(senderUsername).SendAsync("FileReceived", senderUsername, fileName, fileData, false, null, caption);
             }
             else
             {
-                // Private file
-                var targetConnectionId = _userManager.GetConnectionId(toUser);
+                // Private file. A block in either direction suppresses delivery.
+                var suppressed = _blockManager.IsBlockedEitherWay(senderUsername, toUser);
+                var targetConnectionId = suppressed ? null : _userManager.GetConnectionId(toUser);
+
                 if (targetConnectionId != null)
                 {
                     // Send to recipient
                     await Clients.Client(targetConnectionId).SendAsync("FileReceived", senderUsername, fileName, fileData, true, null, caption);
                 }
 
-                // Send back to caller so they see their own file
+                // Send back to caller so they see their own file -- echoed even when delivery was
+                // suppressed, so a blocked sender cannot detect the block.
                 await Clients.Caller.SendAsync("FileReceived", senderUsername, fileName, fileData, true, toUser, caption);
             }
         }
@@ -161,14 +206,102 @@ namespace Pinguin.Hubs
             var senderUsername = _userManager.GetUsername(Context.ConnectionId);
             if (senderUsername == null) return;
 
-            var targetConnectionId = _userManager.GetConnectionId(toUsername);
-            if (targetConnectionId == null) return;
-
-            await Clients.Client(targetConnectionId)
-                .SendAsync("PrivateMessageReceived", senderUsername, payload);
+            // A block in either direction makes the DM read-only. Delivery is dropped, but the
+            // sender's own echo still fires so a blocked user cannot detect the block (PRD 7.1).
+            if (!_blockManager.IsBlockedEitherWay(senderUsername, toUsername))
+            {
+                var targetConnectionId = _userManager.GetConnectionId(toUsername);
+                if (targetConnectionId != null)
+                {
+                    await Clients.Client(targetConnectionId)
+                        .SendAsync("PrivateMessageReceived", senderUsername, payload);
+                }
+            }
 
             await Clients.Caller
                 .SendAsync("PrivateMessageSent", toUsername, payload);
+        }
+
+        // =========================
+        // BLOCKING
+        // =========================
+
+        public async Task<bool> BlockUser(string targetUsername)
+        {
+            var requester = _userManager.GetUsername(Context.ConnectionId);
+            if (requester == null) return false;
+            if (!_blockManager.Block(requester, targetUsername)) return false;
+
+            // Only the blocker is told. Blocked users are never notified (PRD 7.1).
+            await Clients.Caller.SendAsync("UserBlocked", targetUsername);
+            return true;
+        }
+
+        public async Task<bool> UnblockUser(string targetUsername)
+        {
+            var requester = _userManager.GetUsername(Context.ConnectionId);
+            if (requester == null) return false;
+            if (!_blockManager.Unblock(requester, targetUsername)) return false;
+
+            await Clients.Caller.SendAsync("UserUnblocked", targetUsername);
+            return true;
+        }
+
+        public IEnumerable<string> GetBlockedUsers()
+        {
+            var requester = _userManager.GetUsername(Context.ConnectionId);
+            if (requester == null) return Enumerable.Empty<string>();
+            return _blockManager.GetBlockedBy(requester);
+        }
+
+        // =========================
+        // TYPING INDICATORS
+        // =========================
+
+        public Task StartTyping(string scope) => BroadcastTyping(scope, true);
+
+        public Task StopTyping(string scope) => BroadcastTyping(scope, false);
+
+        /// <summary>
+        /// Routes a typing signal to whoever shares the scope: "global", a chatroom id, a study
+        /// room id, or a peer's username for a DM. Blocked recipients are excluded, so a blocker
+        /// never sees typing from someone they blocked.
+        /// </summary>
+        private async Task BroadcastTyping(string scope, bool isTyping)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null || string.IsNullOrEmpty(scope)) return;
+
+            if (scope == "global")
+            {
+                await AllExcludingBlockers(username).SendAsync("TypingIndicator", scope, username, isTyping);
+                return;
+            }
+
+            var room = _chatroomManager.GetRoom(scope);
+            if (room != null)
+            {
+                if (!room.Members.Contains(username)) return;
+                await GroupExcludingBlockers(scope, username).SendAsync("TypingIndicator", scope, username, isTyping);
+                return;
+            }
+
+            var studyRoom = _studyRoomManager.GetRoom(scope);
+            if (studyRoom != null)
+            {
+                if (!studyRoom.Members.Contains(username)) return;
+                await GroupExcludingBlockers($"study_{scope}", username).SendAsync("TypingIndicator", scope, username, isTyping);
+                return;
+            }
+
+            // Anything else is a DM peer's username.
+            if (_blockManager.IsBlockedEitherWay(username, scope)) return;
+
+            var targetConnectionId = _userManager.GetConnectionId(scope);
+            if (targetConnectionId == null) return;
+
+            // The peer files this DM under the sender's name, not their own.
+            await Clients.Client(targetConnectionId).SendAsync("TypingIndicator", username, username, isTyping);
         }
 
         // =========================
@@ -284,7 +417,7 @@ namespace Pinguin.Hubs
             var room = _chatroomManager.GetRoom(roomId);
             if (room == null || !room.Members.Contains(username)) return;
 
-            await Clients.Group(roomId).SendAsync("RoomMessageReceived", roomId, username, payload);
+            await GroupExcludingBlockers(roomId, username).SendAsync("RoomMessageReceived", roomId, username, payload);
         }
 
         public async Task SendRoomFile(string roomId, string fileName, string fileData, string? caption = null)
@@ -295,7 +428,7 @@ namespace Pinguin.Hubs
             var room = _chatroomManager.GetRoom(roomId);
             if (room == null || !room.Members.Contains(username)) return;
 
-            await Clients.Group(roomId).SendAsync("RoomFileReceived", roomId, username, fileName, fileData, caption);
+            await GroupExcludingBlockers(roomId, username).SendAsync("RoomFileReceived", roomId, username, fileName, fileData, caption);
         }
 
         public IEnumerable<object> GetRooms()
@@ -423,7 +556,7 @@ namespace Pinguin.Hubs
             if (room == null || !room.Members.Contains(username)) return;
 
             // Study room messages are plaintext (no E2EE)
-            await Clients.Group($"study_{roomId}").SendAsync("StudyRoomMessageReceived", roomId, username, payload);
+            await GroupExcludingBlockers($"study_{roomId}", username).SendAsync("StudyRoomMessageReceived", roomId, username, payload);
         }
 
         public async Task PromptPingu(string roomId, string prompt)
