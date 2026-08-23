@@ -1,4 +1,7 @@
 public static class Globals{
+    // Stamped once at startup; the metrics page reports uptime against it.
+    public static readonly DateTime ServerStart = DateTime.Now;
+
     public const string SystemPrompt = @"
         [INSTRUCTION START]
 

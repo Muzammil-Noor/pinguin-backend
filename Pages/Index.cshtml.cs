@@ -44,7 +44,7 @@ namespace Pinguin.Pages
             "If your best effort looks like a joke, maybe you're just the punchline."
         ];
         static Random random = new Random();
-        string Quote = Messages[random.Next(Messages.Length)];
+        public string Quote { get; } = Messages[random.Next(Messages.Length)];
 
         public IndexModel(UserManager userManager)
         {
