@@ -2,20 +2,12 @@ using System.Collections.Concurrent;
 
 namespace Pinguin.Services;
 
-/// <summary>
-/// Enforces AI rate limits per study room: 6 prompts per 240 seconds.
-/// Enforced server-side to prevent abuse of LLM resources.
-/// </summary>
 public class StudyRoomRateLimiter
 {
     private readonly ConcurrentDictionary<string, ConcurrentQueue<DateTime>> _promptTimestamps = new();
     private const int MaxPrompts = 6;
     private const int WindowSeconds = 240;
 
-    /// <summary>
-    /// Attempts to consume a prompt token for the given study room.
-    /// </summary>
-    /// <returns>True if allowed, false if rate limited.</returns>
     public bool TryConsume(string roomId)
     {
         var timestamps = _promptTimestamps.GetOrAdd(roomId, _ => new ConcurrentQueue<DateTime>());
@@ -41,9 +33,6 @@ public class StudyRoomRateLimiter
         }
     }
 
-    /// <summary>
-    /// Gets the remaining time in seconds until the rate limit resets for the room.
-    /// </summary>
     public int GetResetTimeSeconds(string roomId)
     {
         if (_promptTimestamps.TryGetValue(roomId, out var timestamps))

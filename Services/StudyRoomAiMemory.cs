@@ -1,11 +1,6 @@
 using System.Collections.Concurrent;
-
 namespace Pinguin.Services;
 
-/// <summary>
-/// Maintains isolated AI conversation history per study room.
-/// Memory lasts the entire 3-hour lifecycle and is cleared when the room is destroyed.
-/// </summary>
 public class StudyRoomAiMemory
 {
     private readonly ConcurrentDictionary<string, List<AiMessage>> _memory = new();

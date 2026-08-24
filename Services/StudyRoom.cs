@@ -9,10 +9,6 @@ public class StudyRoom
     public DateTime ExpiresAt { get; init; } // CreatedAt + 3 hours, set at creation
 }
 
-/// <summary>
-/// Tracks a pending study room invitation that requires consent from all invited members.
-/// Expires after 5 minutes if not all members respond.
-/// </summary>
 public class PendingStudyRoomInvite
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();

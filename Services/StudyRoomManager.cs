@@ -57,9 +57,6 @@ public class StudyRoomManager
         _pendingInvites.TryRemove(inviteId, out _);
     }
 
-    /// <summary>
-    /// Returns all expired or declined pending invites for cleanup.
-    /// </summary>
     public IEnumerable<PendingStudyRoomInvite> GetExpiredInvites()
     {
         return _pendingInvites.Values
@@ -67,10 +64,6 @@ public class StudyRoomManager
             .ToList();
     }
 
-    /// <summary>
-    /// Removes all pending invites involving a specific user (for disconnect cleanup).
-    /// Returns the affected invite IDs.
-    /// </summary>
     public List<PendingStudyRoomInvite> RemoveInvitesInvolving(string username)
     {
         var affected = _pendingInvites.Values
@@ -168,9 +161,6 @@ public class StudyRoomManager
         return _rooms.TryRemove(roomId, out _);
     }
 
-    /// <summary>
-    /// Returns all expired study rooms.
-    /// </summary>
     public IEnumerable<StudyRoom> GetExpiredRooms()
     {
         return _rooms.Values

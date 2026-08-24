@@ -3,10 +3,6 @@ using Pinguin.Hubs;
 
 namespace Pinguin.Services;
 
-/// <summary>
-/// Background service that periodically checks for expired study rooms and pending invitations.
-/// Ticks every 30 seconds to destroy expired rooms and clean up stale invites.
-/// </summary>
 public class StudyRoomExpiryService : BackgroundService
 {
     private readonly StudyRoomManager _studyRoomManager;
