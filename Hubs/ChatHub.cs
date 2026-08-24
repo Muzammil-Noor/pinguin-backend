@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Pinguin.Services;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace Pinguin.Hubs
 {
@@ -13,8 +14,9 @@ namespace Pinguin.Hubs
         private readonly StudyRoomRateLimiter _rateLimiter;
         private readonly ILlmService _llmService;
         private readonly BlockManager _blockManager;
+        private readonly WhiteboardManager _whiteboard;
+        private readonly WhiteboardRateLimiter _whiteboardLimiter;
 
-        // Store PUBLIC keys only (true E2EE)
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
         public ChatHub(
@@ -24,7 +26,9 @@ namespace Pinguin.Hubs
             StudyRoomAiMemory aiMemory,
             StudyRoomRateLimiter rateLimiter,
             ILlmService llmService,
-            BlockManager blockManager)
+            BlockManager blockManager,
+            WhiteboardManager whiteboard,
+            WhiteboardRateLimiter whiteboardLimiter)
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
@@ -33,20 +37,14 @@ namespace Pinguin.Hubs
             _rateLimiter = rateLimiter;
             _llmService = llmService;
             _blockManager = blockManager;
+            _whiteboard = whiteboard;
+            _whiteboardLimiter = whiteboardLimiter;
         }
 
         // =========================
         // BLOCK FILTERING
         // =========================
 
-        /// <summary>
-        /// Connection IDs of everyone who has blocked <paramref name="sender"/>, so they can be
-        /// excluded from a broadcast. Returns null when nobody has blocked them -- the normal
-        /// case -- letting callers take the cheaper unfiltered path.
-        ///
-        /// Filtering keys on sender identity, never message content, so it works unchanged on
-        /// end-to-end encrypted payloads the server cannot read.
-        /// </summary>
         private IReadOnlyList<string>? GetBlockedRecipients(string sender)
         {
             List<string>? excluded = null;
@@ -108,6 +106,7 @@ namespace Pinguin.Hubs
                 // The username is freed immediately, so its blocks must die with it --
                 // whoever claims the name next must not inherit them.
                 _blockManager.RemoveUser(username);
+                _whiteboardLimiter.RemoveConnection(Context.ConnectionId);
                 await Clients.All.SendAsync("UserLeft", username);
 
                 // Chatrooms cleanup
@@ -121,10 +120,12 @@ namespace Pinguin.Hubs
                         {
                             if (deleted)
                             {
+                                _whiteboard.RemoveBoard(room.Id);
                                 await Clients.All.SendAsync("RoomDeleted", room.Id);
                             }
                             else
                             {
+                                _whiteboard.RemoveUser(room.Id, username);
                                 string? newOwner = wasOwner ? removedRoom.Owner : null;
                                 await Clients.Group(room.Id).SendAsync("RoomMemberLeft", room.Id, username, newOwner);
                             }
@@ -262,11 +263,6 @@ namespace Pinguin.Hubs
 
         public Task StopTyping(string scope) => BroadcastTyping(scope, false);
 
-        /// <summary>
-        /// Routes a typing signal to whoever shares the scope: "global", a chatroom id, a study
-        /// room id, or a peer's username for a DM. Blocked recipients are excluded, so a blocker
-        /// never sees typing from someone they blocked.
-        /// </summary>
         private async Task BroadcastTyping(string scope, bool isTyping)
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
@@ -327,6 +323,7 @@ namespace Pinguin.Hubs
 
             if (_chatroomManager.DeleteRoom(roomId, username))
             {
+                _whiteboard.RemoveBoard(roomId);
                 await Clients.Group(roomId).SendAsync("RoomDeleted", roomId);
                 return true;
             }
@@ -399,10 +396,12 @@ namespace Pinguin.Hubs
                 
                 if (deleted)
                 {
+                    _whiteboard.RemoveBoard(roomId);
                     await Clients.All.SendAsync("RoomDeleted", roomId);
                 }
                 else
                 {
+                    _whiteboard.RemoveUser(roomId, username);
                     string? newOwner = wasOwner ? room.Owner : null;
                     await Clients.Group(roomId).SendAsync("RoomMemberLeft", roomId, username, newOwner);
                 }
@@ -434,6 +433,129 @@ namespace Pinguin.Hubs
         public IEnumerable<object> GetRooms()
         {
             return _chatroomManager.GetAllRooms();
+        }
+
+        // =========================
+        // WHITEBOARD
+        // =========================
+        /*
+        
+            Whiteboard ops are deliberately NOT filtered by block. A canvas is shared state, not
+            a message: hiding one user's strokes from another would leave the two clients with
+            different pixels, and a later flood fill would then spread differently for each of
+            them.
+
+        */
+
+        private (string? username, Chatroom? room) ResolveRoomMembership(string roomId)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return (null, null);
+
+            var room = _chatroomManager.GetRoom(roomId);
+            if (room == null || !room.Members.Contains(username)) return (username, null);
+
+            return (username, room);
+        }
+
+        public async Task SendWhiteboardAction(string roomId, JsonElement op)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            if (!_whiteboardLimiter.TryCommit(Context.ConnectionId))
+            {
+                await Clients.Caller.SendAsync("RateLimitExceeded", "whiteboard",
+                    _whiteboardLimiter.GetCommitResetSeconds(Context.ConnectionId));
+                return;
+            }
+
+            var result = _whiteboard.TryAddOp(roomId, username, op, out var committed);
+
+            if (result != WhiteboardManager.AddResult.Ok || committed == null)
+            {
+                await Clients.Caller.SendAsync("WhiteboardRejected", roomId, result.ToString());
+                return;
+            }
+
+            await Clients.Group(roomId).SendAsync("WhiteboardEvent", roomId, new
+            {
+                id = committed.Id,
+                seq = committed.Seq,
+                author = committed.Author,
+                payload = committed.Payload,
+                hidden = false
+            });
+        }
+
+        public async Task StreamWhiteboardStroke(string roomId, string strokeId, JsonElement meta, float[] points)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            // Silent drop: a throttled preview frame is not worth interrupting the artist over,
+            // and the commit still lands.
+            if (!_whiteboardLimiter.TryLiveBatch(Context.ConnectionId)) return;
+
+            await Clients.OthersInGroup(roomId)
+                .SendAsync("WhiteboardLive", roomId, strokeId, username, meta, points);
+        }
+
+        public async Task CancelWhiteboardStroke(string roomId, string strokeId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            await Clients.OthersInGroup(roomId).SendAsync("WhiteboardLiveEnd", roomId, strokeId);
+        }
+
+        public async Task UndoWhiteboard(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            // Only ever finds ops authored by this user (PRD 8.4: undo is per-user).
+            var opId = _whiteboard.Undo(roomId, username);
+            if (opId == null) return;
+
+            await Clients.Group(roomId).SendAsync("WhiteboardUndo", roomId, opId);
+        }
+
+        public async Task RedoWhiteboard(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            var opId = _whiteboard.Redo(roomId, username);
+            if (opId == null) return;
+
+            await Clients.Group(roomId).SendAsync("WhiteboardRedo", roomId, opId);
+        }
+
+        public async Task ClearWhiteboard(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return;
+
+            _whiteboard.Clear(roomId);
+            await Clients.Group(roomId).SendAsync("WhiteboardCleared", roomId, username);
+        }
+
+        public object GetWhiteboardState(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return new { ops = Array.Empty<object>() };
+
+            var ops = _whiteboard.GetState(roomId).Select(o => new
+            {
+                id = o.Id,
+                seq = o.Seq,
+                author = o.Author,
+                payload = o.Payload,
+                hidden = o.Hidden
+            });
+
+            return new { ops };
         }
 
         // =========================
