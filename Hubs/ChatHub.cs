@@ -16,6 +16,8 @@ namespace Pinguin.Hubs
         private readonly BlockManager _blockManager;
         private readonly WhiteboardManager _whiteboard;
         private readonly WhiteboardRateLimiter _whiteboardLimiter;
+        private readonly VoiceChannelManager _voice;
+        private readonly VoiceRateLimiter _voiceLimiter;
 
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
@@ -28,7 +30,9 @@ namespace Pinguin.Hubs
             ILlmService llmService,
             BlockManager blockManager,
             WhiteboardManager whiteboard,
-            WhiteboardRateLimiter whiteboardLimiter)
+            WhiteboardRateLimiter whiteboardLimiter,
+            VoiceChannelManager voice,
+            VoiceRateLimiter voiceLimiter)
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
@@ -39,6 +43,8 @@ namespace Pinguin.Hubs
             _blockManager = blockManager;
             _whiteboard = whiteboard;
             _whiteboardLimiter = whiteboardLimiter;
+            _voice = voice;
+            _voiceLimiter = voiceLimiter;
         }
 
         // =========================
@@ -107,6 +113,14 @@ namespace Pinguin.Hubs
                 // whoever claims the name next must not inherit them.
                 _blockManager.RemoveUser(username);
                 _whiteboardLimiter.RemoveConnection(Context.ConnectionId);
+                _voiceLimiter.RemoveConnection(Context.ConnectionId);
+
+                foreach (var voiceRoomId in _voice.RemoveFromAll(username))
+                {
+                    await Clients.Group(VoiceGroup(voiceRoomId))
+                        .SendAsync("VoiceParticipantLeft", voiceRoomId, username);
+                }
+
                 await Clients.All.SendAsync("UserLeft", username);
 
                 // Chatrooms cleanup
@@ -121,6 +135,7 @@ namespace Pinguin.Hubs
                             if (deleted)
                             {
                                 _whiteboard.RemoveBoard(room.Id);
+                                _voice.RemoveChannel(room.Id);
                                 await Clients.All.SendAsync("RoomDeleted", room.Id);
                             }
                             else
@@ -324,6 +339,7 @@ namespace Pinguin.Hubs
             if (_chatroomManager.DeleteRoom(roomId, username))
             {
                 _whiteboard.RemoveBoard(roomId);
+                _voice.RemoveChannel(roomId);
                 await Clients.Group(roomId).SendAsync("RoomDeleted", roomId);
                 return true;
             }
@@ -397,6 +413,7 @@ namespace Pinguin.Hubs
                 if (deleted)
                 {
                     _whiteboard.RemoveBoard(roomId);
+                    _voice.RemoveChannel(roomId);
                     await Clients.All.SendAsync("RoomDeleted", roomId);
                 }
                 else
@@ -557,6 +574,122 @@ namespace Pinguin.Hubs
 
             return new { ops };
         }
+
+        // =========================
+        // VOICE
+        // =========================
+        //
+        // Signalling only -- no audio touches the server. Peers connect directly, so a block
+        // is enforced by never introducing the two clients to each other: the blocked user is
+        // omitted from the participant list, from join announcements, and from the relay, so
+        // no peer connection between them is ever attempted.
+
+        private bool VoiceVisible(string a, string b) => !_blockManager.IsBlockedEitherWay(a, b);
+
+        public async Task<object> JoinVoice(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return new { ok = false, reason = "notAMember" };
+
+            var result = _voice.TryJoin(roomId, username, out var existing, out var speaking);
+
+            if (result == VoiceChannelManager.JoinResult.Full)
+            {
+                return new { ok = false, reason = "full", capacity = VoiceChannelManager.MaxParticipants };
+            }
+            if (result == VoiceChannelManager.JoinResult.AlreadyJoined)
+            {
+                return new { ok = false, reason = "alreadyJoined" };
+            }
+
+            await Groups.AddToGroupAsync(Context.ConnectionId, VoiceGroup(roomId));
+
+            foreach (var participant in existing)
+            {
+                if (!VoiceVisible(username, participant)) continue;
+
+                var connId = _userManager.GetConnectionId(participant);
+                if (connId != null)
+                {
+                    await Clients.Client(connId).SendAsync("VoiceParticipantJoined", roomId, username);
+                }
+            }
+
+            // The newcomer is the one who offers, which is what keeps two peers from
+            // negotiating against each other at the same time.
+            return new
+            {
+                ok = true,
+                participants = existing.Where(p => VoiceVisible(username, p)).ToList(),
+                speaking = speaking.Where(p => VoiceVisible(username, p)).ToList(),
+                capacity = VoiceChannelManager.MaxParticipants
+            };
+        }
+
+        public async Task LeaveVoice(string roomId)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            if (!_voice.Leave(roomId, username)) return;
+
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, VoiceGroup(roomId));
+            await Clients.Group(VoiceGroup(roomId)).SendAsync("VoiceParticipantLeft", roomId, username);
+        }
+
+        public async Task SendVoiceSignal(string roomId, string targetUsername, object signal)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            if (!_voice.IsInChannel(roomId, username) || !_voice.IsInChannel(roomId, targetUsername)) return;
+            if (!VoiceVisible(username, targetUsername)) return;
+
+            if (!_voiceLimiter.TrySignal(Context.ConnectionId))
+            {
+                await Clients.Caller.SendAsync("RateLimitExceeded", "voice", 0);
+                return;
+            }
+
+            var targetConnId = _userManager.GetConnectionId(targetUsername);
+            if (targetConnId == null) return;
+
+            await Clients.Client(targetConnId).SendAsync("VoiceSignal", roomId, username, signal);
+        }
+
+        public Task PushToTalkStart(string roomId) => BroadcastSpeaking(roomId, true);
+
+        public Task PushToTalkStop(string roomId) => BroadcastSpeaking(roomId, false);
+
+        private async Task BroadcastSpeaking(string roomId, bool isSpeaking)
+        {
+            var username = _userManager.GetUsername(Context.ConnectionId);
+            if (username == null) return;
+
+            if (!_voice.SetSpeaking(roomId, username, isSpeaking)) return;
+            if (!_voiceLimiter.TryPushToTalk(Context.ConnectionId)) return;
+
+            var excluded = GetBlockedRecipients(username);
+            var target = excluded == null
+                ? Clients.Group(VoiceGroup(roomId))
+                : Clients.GroupExcept(VoiceGroup(roomId), excluded);
+
+            await target.SendAsync("SpeakingIndicator", roomId, username, isSpeaking);
+        }
+
+        public object GetVoiceState(string roomId)
+        {
+            var (username, room) = ResolveRoomMembership(roomId);
+            if (username == null || room == null) return new { participants = Array.Empty<string>() };
+
+            return new
+            {
+                participants = _voice.GetParticipants(roomId).Where(p => VoiceVisible(username, p)).ToList(),
+                capacity = VoiceChannelManager.MaxParticipants
+            };
+        }
+
+        private static string VoiceGroup(string roomId) => $"voice_{roomId}";
 
         // =========================
         // STUDY ROOMS

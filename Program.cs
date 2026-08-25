@@ -20,6 +20,8 @@ builder.Services.AddSingleton<StudyRoomRateLimiter>();
 builder.Services.AddSingleton<BlockManager>();
 builder.Services.AddSingleton<WhiteboardManager>();
 builder.Services.AddSingleton<WhiteboardRateLimiter>();
+builder.Services.AddSingleton<VoiceChannelManager>();
+builder.Services.AddSingleton<VoiceRateLimiter>();
 builder.Services.AddSingleton<ILlmService, HuggingFaceLlmService>();
 builder.Services.AddHostedService<StudyRoomExpiryService>();
 builder.Services.AddHttpClient();

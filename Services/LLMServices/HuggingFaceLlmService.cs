@@ -50,8 +50,8 @@ namespace Pinguin.Services
 
                 var requestBody = new
                 {
-                    model = "Qwen/Qwen2.5-72B-Instruct",
-                    messages = messages,
+                    model = "Qwen/Qwen2.5-32B-Instruct",
+                    messages,
                     max_tokens = 150,
                     temperature = 0.7
                 };
