@@ -18,6 +18,59 @@
             <h3>@Model.UptimeText</h3>
         </div>
         
+        <!-- Implicit metrics (PRD 13.3): aggregate counters only, nothing per-user -->
+        <div class="users-dictionary-container">
+            <h2>Traffic</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 16px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.CurrentConnections</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Connections</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.PeakConnections</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Peak</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.TotalConnections</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Total Joins</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.MessagesTotal</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Messages</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.VoiceSignals</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Voice Signals</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.WhiteboardEvents</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">Whiteboard Ops</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #fff;">@Model.AiPrompts</div>
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px;">AI Prompts</div>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(Model.SparklinePoints))
+            {
+                <div style="margin-top: 20px;">
+                    <div style="font-size: 0.75em; color: #cfa3ff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">
+                        Connections over the last @(Model.SampleCount / 2) minutes
+                    </div>
+                    <svg viewBox="0 0 300 60" preserveAspectRatio="none"
+                         style="width: 100%; height: 60px; display: block;">
+                        <polyline fill="none" stroke="#c51ce9" stroke-width="1.5"
+                                  stroke-linejoin="round" points="@Model.SparklinePoints" />
+                    </svg>
+                </div>
+            }
+            else
+            {
+                <p style="color: #cfa3ff; text-align: center; margin-top: 20px; font-style: italic;">Collecting connection history&hellip;</p>
+            }
+        </div>
+
         <!-- Active Users Dictionary Table -->
         <div class="users-dictionary-container">
             <h2>Active Users Dictionary</h2>

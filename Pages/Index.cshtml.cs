@@ -7,6 +7,7 @@ namespace Pinguin.Pages
     public class IndexModel : PageModel
     {
         private readonly UserManager _userManager;
+        private readonly MetricsCollector _metrics;
 
         public string UptimeText { get; set; } = "";
         public double CpuPercent { get; set; }
@@ -46,9 +47,21 @@ namespace Pinguin.Pages
         static Random random = new Random();
         public string Quote { get; } = Messages[random.Next(Messages.Length)];
 
-        public IndexModel(UserManager userManager)
+        // PRD 13.3 implicit metrics: aggregate counters plus connections over time.
+        public long CurrentConnections { get; set; }
+        public long PeakConnections { get; set; }
+        public long TotalConnections { get; set; }
+        public long MessagesTotal { get; set; }
+        public long VoiceSignals { get; set; }
+        public long WhiteboardEvents { get; set; }
+        public long AiPrompts { get; set; }
+        public string SparklinePoints { get; set; } = "";
+        public int SampleCount { get; set; }
+
+        public IndexModel(UserManager userManager, MetricsCollector metrics)
         {
             _userManager = userManager;
+            _metrics = metrics;
         }
 
         public void OnGet()
@@ -72,6 +85,34 @@ namespace Pinguin.Pages
             ActiveUsers = _userManager.GetAllUsersDict();
             UsersCount = ActiveUsers.Count;
 
+            CurrentConnections = _metrics.CurrentConnections;
+            PeakConnections = _metrics.PeakConnections;
+            TotalConnections = _metrics.TotalConnections;
+            MessagesTotal = _metrics.Messages;
+            VoiceSignals = _metrics.VoiceSignals;
+            WhiteboardEvents = _metrics.WhiteboardEvents;
+            AiPrompts = _metrics.AiPrompts;
+            SparklinePoints = BuildSparkline();
+        }
+
+        // Connections-over-time as SVG polyline points in a 300x60 box.
+        private string BuildSparkline()
+        {
+            var samples = _metrics.GetSamples();
+            SampleCount = samples.Count;
+            if (samples.Count < 2) return "";
+
+            var max = Math.Max(1, samples.Max(s => s.Count));
+            var stepX = 300.0 / (samples.Count - 1);
+
+            var points = samples.Select((s, i) =>
+            {
+                var x = i * stepX;
+                var y = 55 - (s.Count / (double)max) * 50; // 5px headroom top and bottom
+                return $"{x:0.#},{y:0.#}";
+            });
+
+            return string.Join(" ", points);
         }
     }
 }
