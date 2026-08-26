@@ -22,8 +22,12 @@ builder.Services.AddSingleton<WhiteboardManager>();
 builder.Services.AddSingleton<WhiteboardRateLimiter>();
 builder.Services.AddSingleton<VoiceChannelManager>();
 builder.Services.AddSingleton<VoiceRateLimiter>();
+builder.Services.AddSingleton<ConnectionGuard>();
+builder.Services.AddSingleton<MessageRateLimiter>();
+builder.Services.AddSingleton<MetricsCollector>();
 builder.Services.AddSingleton<ILlmService, HuggingFaceLlmService>();
 builder.Services.AddHostedService<StudyRoomExpiryService>();
+builder.Services.AddHostedService<MetricsSamplingService>();
 builder.Services.AddHttpClient();
 builder.Services.AddRazorPages();
 

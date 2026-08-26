@@ -20,6 +20,7 @@ namespace Pinguin.Hubs
         private readonly VoiceRateLimiter _voiceLimiter;
         private readonly ConnectionGuard _connectionGuard;
         private readonly MessageRateLimiter _messageLimiter;
+        private readonly MetricsCollector _metrics;
 
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
@@ -37,6 +38,7 @@ namespace Pinguin.Hubs
             VoiceRateLimiter voiceLimiter,
             ConnectionGuard connectionGuard,
             MessageRateLimiter messageLimiter,
+            MetricsCollector metrics)
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
@@ -242,6 +244,7 @@ namespace Pinguin.Hubs
             if (username == null) return;
             if (!await ConsumeMessageBudget()) return;
 
+            _metrics.CountMessage();
             await AllExcludingBlockers(username).SendAsync("MessageReceived", username, message);
         }
 
@@ -249,6 +252,9 @@ namespace Pinguin.Hubs
         {
             var senderUsername = _userManager.GetUsername(Context.ConnectionId);
             if (senderUsername == null) return;
+            if (!await ConsumeFileBudget()) return;
+
+            _metrics.CountMessage();
 
             if (string.IsNullOrEmpty(toUser))
             {
@@ -278,6 +284,9 @@ namespace Pinguin.Hubs
         {
             var senderUsername = _userManager.GetUsername(Context.ConnectionId);
             if (senderUsername == null) return;
+            if (!await ConsumeMessageBudget()) return;
+
+            _metrics.CountMessage();
 
             // A block in either direction makes the DM read-only. Delivery is dropped, but the
             // sender's own echo still fires so a blocked user cannot detect the block (PRD 7.1).
@@ -489,7 +498,9 @@ namespace Pinguin.Hubs
 
             var room = _chatroomManager.GetRoom(roomId);
             if (room == null || !room.Members.Contains(username)) return;
+            if (!await ConsumeMessageBudget()) return;
 
+            _metrics.CountMessage();
             await GroupExcludingBlockers(roomId, username).SendAsync("RoomMessageReceived", roomId, username, payload);
         }
 
@@ -497,6 +508,9 @@ namespace Pinguin.Hubs
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
             if (username == null) return;
+            if (!await ConsumeFileBudget()) return;
+
+            _metrics.CountMessage();
 
             var room = _chatroomManager.GetRoom(roomId);
             if (room == null || !room.Members.Contains(username)) return;
@@ -552,6 +566,7 @@ namespace Pinguin.Hubs
                 return;
             }
 
+            _metrics.CountWhiteboardEvent();
             await Clients.Group(roomId).SendAsync("WhiteboardEvent", roomId, new
             {
                 id = committed.Id,
@@ -711,6 +726,7 @@ namespace Pinguin.Hubs
             var targetConnId = _userManager.GetConnectionId(targetUsername);
             if (targetConnId == null) return;
 
+            _metrics.CountVoiceSignal();
             await Clients.Client(targetConnId).SendAsync("VoiceSignal", roomId, username, signal);
         }
 
@@ -867,6 +883,9 @@ namespace Pinguin.Hubs
             var room = _studyRoomManager.GetRoom(roomId);
             if (room == null || !room.Members.Contains(username)) return;
 
+            if (!await ConsumeMessageBudget()) return;
+
+            _metrics.CountMessage();
             // Study room messages are plaintext (no E2EE)
             await GroupExcludingBlockers($"study_{roomId}", username).SendAsync("StudyRoomMessageReceived", roomId, username, payload);
         }
@@ -887,6 +906,8 @@ namespace Pinguin.Hubs
                 await Clients.Group($"study_{roomId}").SendAsync("PinguResponse", roomId, prompt, "I am busy! Try again in a moment. 🐧", DateTime.UtcNow);
                 return;
             }
+
+            _metrics.CountAiPrompt();
 
             // Broadcast that Pingu is thinking
             await Clients.Group($"study_{roomId}").SendAsync("PinguTyping", roomId, true);
