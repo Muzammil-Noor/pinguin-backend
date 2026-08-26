@@ -18,6 +18,8 @@ namespace Pinguin.Hubs
         private readonly WhiteboardRateLimiter _whiteboardLimiter;
         private readonly VoiceChannelManager _voice;
         private readonly VoiceRateLimiter _voiceLimiter;
+        private readonly ConnectionGuard _connectionGuard;
+        private readonly MessageRateLimiter _messageLimiter;
 
         private static readonly ConcurrentDictionary<string, string> _publicKeys = new();
 
@@ -32,7 +34,9 @@ namespace Pinguin.Hubs
             WhiteboardManager whiteboard,
             WhiteboardRateLimiter whiteboardLimiter,
             VoiceChannelManager voice,
-            VoiceRateLimiter voiceLimiter)
+            VoiceRateLimiter voiceLimiter,
+            ConnectionGuard connectionGuard,
+            MessageRateLimiter messageLimiter,
         {
             _userManager = userManager;
             _chatroomManager = chatroomManager;
@@ -45,6 +49,30 @@ namespace Pinguin.Hubs
             _whiteboardLimiter = whiteboardLimiter;
             _voice = voice;
             _voiceLimiter = voiceLimiter;
+            _connectionGuard = connectionGuard;
+            _messageLimiter = messageLimiter;
+            _metrics = metrics;
+        }
+
+        // Marks connections that passed the guard, so the disconnect path only decrements
+        // the gauge for connections it actually counted.
+        private const string MetricsCountedKey = "metrics_counted";
+
+        public override async Task OnConnectedAsync()
+        {
+            var ip = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            // PRD 11: per-IP connection rate limiting, enforced before the hub does any work.
+            if (!_connectionGuard.AllowConnection(ip))
+            {
+                Context.Abort();
+                return;
+            }
+
+            _metrics.ConnectionOpened();
+            Context.Items[MetricsCountedKey] = true;
+
+            await base.OnConnectedAsync();
         }
 
         // =========================
@@ -76,17 +104,24 @@ namespace Pinguin.Hubs
             return excluded == null ? Clients.Group(groupName) : Clients.GroupExcept(groupName, excluded);
         }
 
-        public async Task<bool> JoinChat(string username)
+        public object GetJoinChallenge() => _connectionGuard.IssueChallenge(Context.ConnectionId);
+
+        public async Task<string> JoinChat(string username, string challengeSolution)
         {
-            var success = _userManager.TryAddUser(Context.ConnectionId, username);
-            if (!success) return false;
+            // Ordering matters: the challenge is checked before the username, so probing
+            // which names are taken costs a proof of work per probe.
+            if (!_connectionGuard.AllowUsernameAttempt(Context.ConnectionId)) return "rateLimited";
+            if (!_connectionGuard.VerifyChallenge(Context.ConnectionId, challengeSolution)) return "challengeFailed";
+            if (string.IsNullOrWhiteSpace(username) || username.Length > 32) return "invalid";
+
+            if (!_userManager.TryAddUser(Context.ConnectionId, username)) return "taken";
 
             await Clients.Others.SendAsync("UserJoined", username);
 
             // Send all existing public keys to the new user
             foreach (var kvp in _publicKeys) await Clients.Caller.SendAsync("UserPublicKey", kvp.Key, kvp.Value);
 
-            return true;
+            return "ok";
         }
 
         public Task RegisterPublicKey(string username, string publicKeyPem)
@@ -104,6 +139,10 @@ namespace Pinguin.Hubs
 
         public override async Task OnDisconnectedAsync(Exception? exception)
         {
+            if (Context.Items.ContainsKey(MetricsCountedKey)) _metrics.ConnectionClosed();
+            _messageLimiter.RemoveConnection(Context.ConnectionId);
+            _connectionGuard.RemoveConnection(Context.ConnectionId);
+
             var username = _userManager.RemoveUser(Context.ConnectionId);
             if (username != null)
             {
@@ -180,10 +219,28 @@ namespace Pinguin.Hubs
             await base.OnDisconnectedAsync(exception);
         }
 
+        // PRD 12: one message budget shared across every channel, one file budget likewise.
+        private async Task<bool> ConsumeMessageBudget()
+        {
+            if (_messageLimiter.TryMessage(Context.ConnectionId)) return true;
+            await Clients.Caller.SendAsync("RateLimitExceeded", "messages",
+                _messageLimiter.GetMessageResetSeconds(Context.ConnectionId));
+            return false;
+        }
+
+        private async Task<bool> ConsumeFileBudget()
+        {
+            if (_messageLimiter.TryFile(Context.ConnectionId)) return true;
+            await Clients.Caller.SendAsync("RateLimitExceeded", "files",
+                _messageLimiter.GetFileResetSeconds(Context.ConnectionId));
+            return false;
+        }
+
         public async Task SendMessage(object message)
         {
             var username = _userManager.GetUsername(Context.ConnectionId);
             if (username == null) return;
+            if (!await ConsumeMessageBudget()) return;
 
             await AllExcludingBlockers(username).SendAsync("MessageReceived", username, message);
         }
